@@ -48,7 +48,7 @@ bool GitHubOtaUpdater::checkAndUpdateNow() {
     return false;
   }
 
-  Serial.println("[GITHUB-OTA] Novo firmware detectado! Iniciando download e atualizacao OTA...");
+  Serial.println("[GITHUB-OTA] Novo firmware detectado! Iniciando download e atualizacao...");
   return performHttpUpdate(remoteMd5);
 }
 
