@@ -2,7 +2,9 @@
 #include <WiFi.h>
 
 WiFiService::WiFiService(ICredentialsStore& store, IStatusIndicator& indicator)
-    : _store(store), _indicator(indicator) {
+    : _store(store), _indicator(indicator) {}
+
+void WiFiService::begin() {
   _credentials = _store.load();
   _tokens = _store.loadTokens();
 }
@@ -117,7 +119,8 @@ String WiFiService::localIp() const {
   return WiFi.localIP().toString();
 }
 
-WiFiCredentials WiFiService::getCurrentCredentials() const {
+WiFiCredentials WiFiService::getCurrentCredentials() {
+  _credentials = _store.load();
   return _credentials;
 }
 
@@ -127,7 +130,8 @@ void WiFiService::updateCredentials(const WiFiCredentials& creds) {
   _store.save(_credentials);
 }
 
-ApiTokens WiFiService::getCurrentTokens() const {
+ApiTokens WiFiService::getCurrentTokens() {
+  _tokens = _store.loadTokens();
   return _tokens;
 }
 

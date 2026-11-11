@@ -108,6 +108,9 @@ void setup() {
   // Inicializa o controlador visual do LED (Task FreeRTOS no Core 0)
   statusIndicator.begin();
 
+  // Carrega credenciais e tokens da NVS (após initArduino ter inicializado a partição NVS)
+  wifiService.begin();
+
   // Prepara o armazenamento LittleFS e registra os 5 bots no orquestrador
   initializeBotStorageAndRoster();
 

@@ -15,15 +15,16 @@ class WiFiService {
 public:
   WiFiService(ICredentialsStore& store, IStatusIndicator& indicator);
 
+  void begin();
   bool connectWithSaved(uint32_t timeoutMs);
   bool testConnection(const WiFiCredentials& creds, uint32_t timeoutMs, String& outIp);
   std::vector<ScannedNetwork> scanNetworks();
   void ensureConnected(uint32_t timeoutMs);
   bool isConnected() const;
   String localIp() const;
-  WiFiCredentials getCurrentCredentials() const;
+  WiFiCredentials getCurrentCredentials();
   void updateCredentials(const WiFiCredentials& creds);
-  ApiTokens getCurrentTokens() const;
+  ApiTokens getCurrentTokens();
   void updateTokens(const ApiTokens& tokens);
 
 private:

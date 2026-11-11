@@ -72,6 +72,7 @@ void ConfigPortal::setupRoutes() {
   });
 
   _server.on("/save", HTTP_POST, [this]() {
+    _startTimeMs = millis();
     bool savedWifi = false;
     if (_server.hasArg("ssid") && _server.arg("ssid").length() > 0) {
       WiFiCredentials creds{_server.arg("ssid"), _server.arg("pass")};
@@ -90,7 +91,7 @@ void ConfigPortal::setupRoutes() {
     _wifiService.updateTokens(tokens);
 
     String msg = savedWifi
-        ? ("Configurações e tokens salvos (Wi-Fi: \"" + htmlEscape(_server.arg("ssid")) + "\")!")
+        ? ("Configurações e tokens salvos na NVS (Wi-Fi: \"" + htmlEscape(_server.arg("ssid")) + "\")!")
         : String("Tokens de API salvos na NVS com sucesso!");
     _server.send(200, "text/html", buildHtmlPage(msg));
   });
@@ -163,7 +164,7 @@ void ConfigPortal::setupRoutes() {
   });
 }
 
-String ConfigPortal::buildHtmlPage(const String& message) const {
+String ConfigPortal::buildHtmlPage(const String& message) {
   uint32_t elapsed = millis() - _startTimeMs;
   uint32_t remainingSec = (elapsed < _activeTimeoutMs) ? (_activeTimeoutMs - elapsed) / 1000 : 0;
   WiFiCredentials creds = _wifiService.getCurrentCredentials();
@@ -243,31 +244,31 @@ String ConfigPortal::buildHtmlPage(const String& message) const {
       <h1 style="font-size: 1.1rem; margin-bottom: 12px;">🔑 Tokens & Autorização</h1>
 
       <label for="auth_uid">Telegram Authorized User ID</label>
-      <input type="text" id="auth_uid" name="auth_uid" placeholder="Ex: 1234567890" value=")rawliteral" +
+      <input type="text" id="auth_uid" name="auth_uid" autocomplete="off" spellcheck="false" placeholder="Ex: 1234567890" value=")rawliteral" +
                 htmlEscape(tokens.authorizedUserId) + R"rawliteral(">
 
       <label for="tg_free">Telegram Token — Freelancer Bot</label>
-      <input type="password" id="tg_free" name="tg_free" placeholder="Ex: 123456:ABC-DEF..." value=")rawliteral" +
+      <input type="text" id="tg_free" name="tg_free" autocomplete="off" spellcheck="false" placeholder="Ex: 123456:ABC-DEF..." value=")rawliteral" +
                 htmlEscape(tokens.telegramFreelancer) + R"rawliteral(">
 
       <label for="tg_gym">Telegram Token — Gym Calorie Bot</label>
-      <input type="password" id="tg_gym" name="tg_gym" placeholder="Ex: 123456:ABC-DEF..." value=")rawliteral" +
+      <input type="text" id="tg_gym" name="tg_gym" autocomplete="off" spellcheck="false" placeholder="Ex: 123456:ABC-DEF..." value=")rawliteral" +
                 htmlEscape(tokens.telegramGymCalorie) + R"rawliteral(">
 
       <label for="tg_merc">Telegram Token — Mercado Bot</label>
-      <input type="password" id="tg_merc" name="tg_merc" placeholder="Ex: 123456:ABC-DEF..." value=")rawliteral" +
+      <input type="text" id="tg_merc" name="tg_merc" autocomplete="off" spellcheck="false" placeholder="Ex: 123456:ABC-DEF..." value=")rawliteral" +
                 htmlEscape(tokens.telegramMercado) + R"rawliteral(">
 
       <label for="tg_money">Telegram Token — Money Manager Bot</label>
-      <input type="password" id="tg_money" name="tg_money" placeholder="Ex: 123456:ABC-DEF..." value=")rawliteral" +
+      <input type="text" id="tg_money" name="tg_money" autocomplete="off" spellcheck="false" placeholder="Ex: 123456:ABC-DEF..." value=")rawliteral" +
                 htmlEscape(tokens.telegramMoneyManager) + R"rawliteral(">
 
       <label for="tg_task">Telegram Token — Task Manager Bot</label>
-      <input type="password" id="tg_task" name="tg_task" placeholder="Ex: 123456:ABC-DEF..." value=")rawliteral" +
+      <input type="text" id="tg_task" name="tg_task" autocomplete="off" spellcheck="false" placeholder="Ex: 123456:ABC-DEF..." value=")rawliteral" +
                 htmlEscape(tokens.telegramTaskManager) + R"rawliteral(">
 
       <label for="fl_oauth">Freelancer.com API OAuth Token</label>
-      <input type="password" id="fl_oauth" name="fl_oauth" placeholder="Token OAuth do Freelancer.com" value=")rawliteral" +
+      <input type="text" id="fl_oauth" name="fl_oauth" autocomplete="off" spellcheck="false" placeholder="Token OAuth do Freelancer.com" value=")rawliteral" +
                 htmlEscape(tokens.freelancerApiToken) + R"rawliteral(">
 
       <button type="submit" class="btn btn-primary">💾 Salvar Wi-Fi e Tokens</button>

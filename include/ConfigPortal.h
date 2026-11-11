@@ -31,7 +31,7 @@ private:
   String _lastTestResultJson;
 
   void setupRoutes();
-  String buildHtmlPage(const String& message = "") const;
+  String buildHtmlPage(const String& message = "");
   static String htmlEscape(const String& str);
   static String jsonEscape(const String& str);
 };
