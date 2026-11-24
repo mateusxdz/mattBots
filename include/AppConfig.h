@@ -17,19 +17,17 @@ namespace AppConfig {
   // GitHub Pull-OTA (Verificação periódica a cada 60 segundos)
   constexpr uint32_t OTA_CHECK_INTERVAL_MS = 60000;     // 60 segundos (60.000 ms)
 
-  // URLs do seu repositório no GitHub (altere para o seu usuário/repositório)
-  // Dica: O arquivo firmware.md5 (ou version.txt) contém o hash MD5 ou versão do binário no GitHub,
-  // evitando baixar o firmware.bin inteiro a cada 60 segundos sem necessidade.
+  // URLs diretas do raw.githubusercontent.com (evita redirect 302 e duplo handshake TLS)
   constexpr char GITHUB_FIRMWARE_MD5_URL[] =
-      "https://github.com/mateusxdz/mattBots/raw/refs/heads/master/ota/firmware.md5";
+      "https://raw.githubusercontent.com/mateusxdz/mattBots/master/ota/firmware.md5";
   constexpr char GITHUB_FIRMWARE_BIN_URL[] =
-      "https://github.com/mateusxdz/mattBots/raw/refs/heads/master/ota/firmware.bin";
+      "https://raw.githubusercontent.com/mateusxdz/mattBots/master/ota/firmware.bin";
 
   // ============================================================================
   // Configurações Globais dos Bots Telegram & Freelancer
   // ============================================================================
   // Intervalo entre passos do Round-Robin de polling dos bots (ms)
-  constexpr uint32_t BOT_ROUND_ROBIN_STEP_MS = 500;
+  constexpr uint32_t BOT_ROUND_ROBIN_STEP_MS = 100;
 
   // Configuração da API do Freelancer.com
   constexpr char FREELANCER_ACTIVE_PROJECTS_URL[] =

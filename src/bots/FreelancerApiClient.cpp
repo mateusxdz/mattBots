@@ -40,9 +40,10 @@ bool FreelancerApiClient::fetchActiveProjects(std::vector<FreelancerProject>& ou
     return false;
   }
 
-  HTTPClient http;
+  HTTPClient& http = _transport.http();
   http.setTimeout(15000);
-  http.useHTTP10(true);
+  http.useHTTP10(false);
+  http.setReuse(true);
 
   if (!http.begin(_transport.client(), _activeProjectsUrl)) {
     return false;
@@ -53,9 +54,15 @@ bool FreelancerApiClient::fetchActiveProjects(std::vector<FreelancerProject>& ou
   int code = http.GET();
   if (code != HTTP_CODE_OK) {
     Serial.printf("[FREELANCER-API] GET active projects falhou: HTTP %d\n", code);
+    if (code > 0) {
+      http.getString();
+    }
     http.end();
     return false;
   }
+
+  String payload = http.getString();
+  http.end();
 
   JsonDocument filter;
   JsonObject projFilter = filter["result"]["projects"].add<JsonObject>();
@@ -70,8 +77,7 @@ bool FreelancerApiClient::fetchActiveProjects(std::vector<FreelancerProject>& ou
   projFilter["currency"]["code"] = true;
 
   JsonDocument doc;
-  DeserializationError err = deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter));
-  http.end();
+  DeserializationError err = deserializeJson(doc, payload, DeserializationOption::Filter(filter));
 
   if (err) {
     Serial.printf("[FREELANCER-API] Erro JSON active projects: %s\n", err.c_str());
@@ -104,11 +110,15 @@ bool FreelancerApiClient::fetchActiveProjects(std::vector<FreelancerProject>& ou
 }
 
 bool FreelancerApiClient::fetchProjectDetails(const String& projectId, FreelancerProject& outProject) {
+  if (_oauthToken.length() == 0) {
+    return false;
+  }
   String url = "https://www.freelancer.com/api/projects/0.1/projects/" + projectId + "/";
 
-  HTTPClient http;
+  HTTPClient& http = _transport.http();
   http.setTimeout(12000);
-  http.useHTTP10(true);
+  http.useHTTP10(false);
+  http.setReuse(true);
 
   if (!http.begin(_transport.client(), url)) {
     return false;
@@ -118,9 +128,15 @@ bool FreelancerApiClient::fetchProjectDetails(const String& projectId, Freelance
 
   int code = http.GET();
   if (code != HTTP_CODE_OK) {
+    if (code > 0) {
+      http.getString();
+    }
     http.end();
     return false;
   }
+
+  String payload = http.getString();
+  http.end();
 
   JsonDocument filter;
   JsonObject resFilter = filter["result"].to<JsonObject>();
@@ -135,8 +151,7 @@ bool FreelancerApiClient::fetchProjectDetails(const String& projectId, Freelance
   resFilter["currency"]["code"] = true;
 
   JsonDocument doc;
-  DeserializationError err = deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter));
-  http.end();
+  DeserializationError err = deserializeJson(doc, payload, DeserializationOption::Filter(filter));
 
   if (err || !doc["result"].is<JsonObject>()) {
     return false;
@@ -163,10 +178,14 @@ int64_t FreelancerApiClient::fetchSelfBidderId() {
   if (_cachedBidderId > 0) {
     return _cachedBidderId;
   }
+  if (_oauthToken.length() == 0) {
+    return 0;
+  }
 
-  HTTPClient http;
+  HTTPClient& http = _transport.http();
   http.setTimeout(12000);
-  http.useHTTP10(true);
+  http.useHTTP10(false);
+  http.setReuse(true);
 
   if (!http.begin(_transport.client(), "https://www.freelancer.com/api/users/0.1/self/")) {
     return 0;
@@ -176,12 +195,15 @@ int64_t FreelancerApiClient::fetchSelfBidderId() {
 
   int code = http.GET();
   if (code == HTTP_CODE_OK) {
+    String payload = http.getString();
     JsonDocument filter;
     filter["result"]["id"] = true;
     JsonDocument doc;
-    if (!deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter))) {
+    if (!deserializeJson(doc, payload, DeserializationOption::Filter(filter))) {
       _cachedBidderId = doc["result"]["id"].as<int64_t>();
     }
+  } else if (code > 0) {
+    http.getString();
   }
   http.end();
   return _cachedBidderId;
@@ -198,9 +220,10 @@ bool FreelancerApiClient::placeBid(const String& projectId,
     return false;
   }
 
-  HTTPClient http;
+  HTTPClient& http = _transport.http();
   http.setTimeout(15000);
-  http.useHTTP10(true);
+  http.useHTTP10(false);
+  http.setReuse(true);
 
   if (!http.begin(_transport.client(), "https://www.freelancer.com/api/projects/0.1/bids/")) {
     outMessage = "Failed to initialize HTTP connection.";
@@ -223,9 +246,11 @@ bool FreelancerApiClient::placeBid(const String& projectId,
   serializeJson(payloadDoc, body);
 
   int code = http.POST(body);
-  JsonDocument respDoc;
-  deserializeJson(respDoc, http.getStream());
+  String respPayload = (code > 0) ? http.getString() : "";
   http.end();
+
+  JsonDocument respDoc;
+  deserializeJson(respDoc, respPayload);
 
   if (code == 200 || code == 201) {
     String status = respDoc["status"] | "";

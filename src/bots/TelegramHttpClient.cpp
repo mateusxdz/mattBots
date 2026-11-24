@@ -36,9 +36,10 @@ bool TelegramHttpClient::getUpdates(int64_t offset, std::vector<TelegramUpdate>&
     url += "&offset=" + String(offset);
   }
 
-  HTTPClient http;
+  HTTPClient& http = _transport.http();
   http.setTimeout(10000);
-  http.useHTTP10(true); // Permite streaming direto para ArduinoJson sem chunked encoding
+  http.useHTTP10(false);
+  http.setReuse(true);
 
   if (!http.begin(_transport.client(), url)) {
     return false;
@@ -49,6 +50,9 @@ bool TelegramHttpClient::getUpdates(int64_t offset, std::vector<TelegramUpdate>&
     http.end();
     return false;
   }
+
+  String payload = http.getString();
+  http.end();
 
   // Filtro ArduinoJson para extrair apenas os campos essenciais e economizar SRAM
   JsonDocument filter;
@@ -71,8 +75,7 @@ bool TelegramHttpClient::getUpdates(int64_t offset, std::vector<TelegramUpdate>&
   }
 
   JsonDocument doc;
-  DeserializationError err = deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter));
-  http.end();
+  DeserializationError err = deserializeJson(doc, payload, DeserializationOption::Filter(filter));
 
   if (err || !doc["ok"].as<bool>()) {
     return false;
@@ -117,9 +120,10 @@ int64_t TelegramHttpClient::sendMessage(const String& chatId,
   if (_botToken.length() == 0) {
     return 0;
   }
-  HTTPClient http;
+  HTTPClient& http = _transport.http();
   http.setTimeout(12000);
-  http.useHTTP10(true);
+  http.useHTTP10(false);
+  http.setReuse(true);
 
   if (!http.begin(_transport.client(), buildApiUrl("sendMessage"))) {
     return 0;
@@ -147,10 +151,11 @@ int64_t TelegramHttpClient::sendMessage(const String& chatId,
   int64_t sentMsgId = 0;
 
   if (code == HTTP_CODE_OK) {
+    String respPayload = http.getString();
     JsonDocument filter;
     filter["result"]["message_id"] = true;
     JsonDocument respDoc;
-    if (!deserializeJson(respDoc, http.getStream(), DeserializationOption::Filter(filter))) {
+    if (!deserializeJson(respDoc, respPayload, DeserializationOption::Filter(filter))) {
       sentMsgId = respDoc["result"]["message_id"].as<int64_t>();
     }
   } else {
@@ -166,8 +171,13 @@ bool TelegramHttpClient::editMessageText(const String& chatId,
                                          const String& text,
                                          const char* parseMode,
                                          const String& replyMarkupJson) {
-  HTTPClient http;
+  if (_botToken.length() == 0) {
+    return false;
+  }
+  HTTPClient& http = _transport.http();
   http.setTimeout(12000);
+  http.useHTTP10(false);
+  http.setReuse(true);
 
   if (!http.begin(_transport.client(), buildApiUrl("editMessageText"))) {
     return false;
@@ -193,14 +203,22 @@ bool TelegramHttpClient::editMessageText(const String& chatId,
   serializeJson(payloadDoc, body);
 
   int code = http.POST(body);
+  if (code > 0) {
+    http.getString(); // Consome o corpo da resposta para manter o socket Keep-Alive limpo
+  }
   http.end();
   return code == HTTP_CODE_OK;
 }
 
 bool TelegramHttpClient::answerCallbackQuery(const String& callbackQueryId,
                                              const String& text) {
-  HTTPClient http;
+  if (_botToken.length() == 0) {
+    return false;
+  }
+  HTTPClient& http = _transport.http();
   http.setTimeout(8000);
+  http.useHTTP10(false);
+  http.setReuse(true);
 
   if (!http.begin(_transport.client(), buildApiUrl("answerCallbackQuery"))) {
     return false;
@@ -217,6 +235,9 @@ bool TelegramHttpClient::answerCallbackQuery(const String& callbackQueryId,
   serializeJson(payloadDoc, body);
 
   int code = http.POST(body);
+  if (code > 0) {
+    http.getString(); // Consome o corpo da resposta para manter o socket Keep-Alive limpo
+  }
   http.end();
   return code == HTTP_CODE_OK;
 }

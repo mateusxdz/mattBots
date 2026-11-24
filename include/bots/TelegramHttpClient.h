@@ -1,22 +1,30 @@
 #pragma once
 #include <Arduino.h>
 #include <WiFiClientSecure.h>
+#include <HTTPClient.h>
 #include "bots/ITelegramClient.h"
 
-// Contexto TLS compartilhado entre todos os clientes HTTPS para economizar SRAM no ESP32-WROOM-32E
+// Contexto TLS e cliente HTTP Keep-Alive compartilhados entre todos os clientes HTTPS
+// para economizar SRAM e reutilizar a sessão TLS aberta com api.telegram.org
 class SharedHttpsTransport {
 public:
   SharedHttpsTransport() {
     _client.setInsecure();
     _client.setTimeout(15);
+    _http.setReuse(true);
   }
 
   WiFiClientSecure& client() {
     return _client;
   }
 
+  HTTPClient& http() {
+    return _http;
+  }
+
 private:
   WiFiClientSecure _client;
+  HTTPClient _http;
 };
 
 // Implementação concreta do cliente Telegram reutilizando transporte TLS único (SRP / DIP)
