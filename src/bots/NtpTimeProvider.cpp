@@ -12,12 +12,16 @@ void NtpTimeProvider::begin() {
 }
 
 void NtpTimeProvider::ensureSynced() {
+  if (_synced) {
+    return;
+  }
   if (!_configured) {
     begin();
     return;
   }
   struct tm timeinfo;
-  if (getLocalTime(&timeinfo, 200)) {
+  if (getLocalTime(&timeinfo, 50)) {
+    _synced = true;
     return;
   }
   uint32_t now = millis();

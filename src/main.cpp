@@ -37,8 +37,10 @@ static LittleFsJsonStore jsonStore;
 static NtpTimeProvider timeProvider(AppConfig::NTP_GMT_OFFSET_SEC,
                                     AppConfig::NTP_DAYLIGHT_OFFSET_SEC);
 
-// Contexto TLS único compartilhado por todos os bots (economia de RAM no ESP32-WROOM-32E)
+// Contexto TLS dedicado ao Telegram (mantém sessão Keep-Alive contínua com api.telegram.org)
+// e contexto separado para o Freelancer.com (evita derrubar o socket TLS do Telegram a cada 30s)
 static SharedHttpsTransport httpsTransport;
+static SharedHttpsTransport freelancerHttpsTransport;
 
 // Clientes HTTP injetados em cada Bot (tokens carregados da NVS)
 static TelegramHttpClient tgFreelancer(httpsTransport, "", true);
@@ -47,7 +49,7 @@ static TelegramHttpClient tgMercado(httpsTransport, "", false);
 static TelegramHttpClient tgMoneyManager(httpsTransport, "", false);
 static TelegramHttpClient tgTaskManager(httpsTransport, "", false);
 
-static FreelancerApiClient freelancerApiClient(httpsTransport,
+static FreelancerApiClient freelancerApiClient(freelancerHttpsTransport,
                                                "",
                                                AppConfig::FREELANCER_ACTIVE_PROJECTS_URL);
 
@@ -156,5 +158,5 @@ void loop() {
     botOrchestrator.loop();
   }
 
-  delay(10);
+  delay(2);
 }

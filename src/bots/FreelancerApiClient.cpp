@@ -63,6 +63,7 @@ bool FreelancerApiClient::fetchActiveProjects(std::vector<FreelancerProject>& ou
 
   String payload = http.getString();
   http.end();
+  _transport.client().stop(); // Libera buffer TLS (~40KB) após consulta periódica de 30s
 
   JsonDocument filter;
   JsonObject projFilter = filter["result"]["projects"].add<JsonObject>();
@@ -137,6 +138,7 @@ bool FreelancerApiClient::fetchProjectDetails(const String& projectId, Freelance
 
   String payload = http.getString();
   http.end();
+  _transport.client().stop(); // Libera buffer TLS (~40KB) após consulta periódica de 30s
 
   JsonDocument filter;
   JsonObject resFilter = filter["result"].to<JsonObject>();

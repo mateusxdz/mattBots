@@ -20,6 +20,7 @@ private:
   long _gmtOffsetSec;
   int _daylightOffsetSec;
   bool _configured = false;
+  bool _synced = false;
   uint32_t _lastSyncAttemptMs = 0;
 
   static int32_t daysFromCivil(int y, unsigned m, unsigned d);

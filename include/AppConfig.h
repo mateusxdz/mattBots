@@ -27,7 +27,7 @@ namespace AppConfig {
   // Configurações Globais dos Bots Telegram & Freelancer
   // ============================================================================
   // Intervalo entre passos do Round-Robin de polling dos bots (ms)
-  constexpr uint32_t BOT_ROUND_ROBIN_STEP_MS = 100;
+  constexpr uint32_t BOT_ROUND_ROBIN_STEP_MS = 15;
 
   // Configuração da API do Freelancer.com
   constexpr char FREELANCER_ACTIVE_PROJECTS_URL[] =

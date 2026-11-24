@@ -2,6 +2,8 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 
+bool SharedHttpsTransport::_recentActivity = false;
+
 TelegramHttpClient::TelegramHttpClient(SharedHttpsTransport& transport,
                                        const String& botToken,
                                        bool allowCallbacks)
@@ -46,6 +48,7 @@ bool TelegramHttpClient::getUpdates(int64_t offset, std::vector<TelegramUpdate>&
   }
 
   int code = http.GET();
+  _transport.client().setNoDelay(true);
   if (code != HTTP_CODE_OK) {
     http.end();
     return false;
@@ -110,6 +113,9 @@ bool TelegramHttpClient::getUpdates(int64_t offset, std::vector<TelegramUpdate>&
     }
   }
 
+  if (!outUpdates.empty()) {
+    SharedHttpsTransport::notifyBotActivity();
+  }
   return true;
 }
 

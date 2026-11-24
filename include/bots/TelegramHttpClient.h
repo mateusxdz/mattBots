@@ -11,6 +11,7 @@ public:
   SharedHttpsTransport() {
     _client.setInsecure();
     _client.setTimeout(15);
+    _client.setNoDelay(true);
     _http.setReuse(true);
   }
 
@@ -22,9 +23,20 @@ public:
     return _http;
   }
 
+  static void notifyBotActivity() {
+    _recentActivity = true;
+  }
+
+  static bool consumeBotActivity() {
+    bool v = _recentActivity;
+    _recentActivity = false;
+    return v;
+  }
+
 private:
   WiFiClientSecure _client;
   HTTPClient _http;
+  static bool _recentActivity;
 };
 
 // Implementação concreta do cliente Telegram reutilizando transporte TLS único (SRP / DIP)

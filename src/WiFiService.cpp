@@ -27,6 +27,7 @@ bool WiFiService::connectWithSaved(uint32_t timeoutMs) {
   Serial.printf("[WIFI] Conectando a \"%s\"...\n", _credentials.ssid.c_str());
 
   WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false); // Desativa Modem Sleep (DTIM) para eliminar latência de 100-300ms por pacote
   WiFi.begin(_credentials.ssid.c_str(), _credentials.password.c_str());
 
   uint32_t startAttempt = millis();
@@ -37,6 +38,7 @@ bool WiFiService::connectWithSaved(uint32_t timeoutMs) {
   Serial.println();
 
   if (WiFi.status() == WL_CONNECTED) {
+    WiFi.setSleep(false);
     _indicator.setState(SystemState::WIFI_CONNECTED);
     Serial.printf("[WIFI] Conectado com sucesso! IP: %s\n", WiFi.localIP().toString().c_str());
     return true;

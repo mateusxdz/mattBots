@@ -20,5 +20,9 @@ private:
   size_t _currentIndex = 0;
   uint32_t _lastStepMs = 0;
   bool _initialized = false;
+
+  IBot* _activeBot = nullptr;
+  uint32_t _activeBotUntilMs = 0;
+  bool _pollActiveTurn = false;
 };
 
