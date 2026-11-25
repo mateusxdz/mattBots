@@ -31,6 +31,44 @@ void TaskManagerBot::loadTasksData(JsonDocument& doc) {
   if (!doc["today"].is<JsonArray>()) {
     doc["today"].to<JsonArray>();
   }
+
+  // Auto-correção: se uma tarefa foi criada acidentalmente apenas com o ID numérico de outra
+  // tarefa existente no campo "name" (ex: `/schedule 27/11 186` gerou `[195] "186" (27/11)`),
+  // aplica a categoria/data diretamente na tarefa original (#186) e remove a duplicata (#195).
+  JsonArray tasks = doc["tasks"].as<JsonArray>();
+  bool migrated = false;
+  for (int i = static_cast<int>(tasks.size()) - 1; i >= 0; i--) {
+    JsonObject stub = tasks[i];
+    String stubName = stub["name"] | "";
+    stubName.trim();
+    if (!isPositiveIntToken(stubName)) {
+      continue;
+    }
+    int refId = stubName.toInt();
+    int stubId = stub["id"] | 0;
+    if (refId <= 0 || refId == stubId) {
+      continue;
+    }
+    for (size_t j = 0; j < tasks.size(); j++) {
+      JsonObject target = tasks[j];
+      if ((target["id"] | 0) == refId) {
+        String stubType = stub["type"] | "";
+        String stubWhen = stub["when"] | "";
+        if (stubType.length() > 0) {
+          target["type"] = stubType;
+        }
+        if (stubWhen.length() > 0) {
+          target["when"] = stubWhen;
+        }
+        tasks.remove(i);
+        migrated = true;
+        break;
+      }
+    }
+  }
+  if (migrated) {
+    _store.save(_dataFilePath, doc);
+  }
 }
 
 const char* TaskManagerBot::categoryToKey(TaskCategory cat) {
@@ -72,6 +110,18 @@ bool TaskManagerBot::isDateToken(const String& token) {
     }
   }
   return (slashCount == 1 || slashCount == 2);
+}
+
+bool TaskManagerBot::isPositiveIntToken(const String& token) {
+  if (token.length() == 0) {
+    return false;
+  }
+  for (unsigned int i = 0; i < token.length(); i++) {
+    if (!isDigit(token[i])) {
+      return false;
+    }
+  }
+  return token.toInt() > 0;
 }
 
 void TaskManagerBot::extractOptionalDatePrefix(const String& rawInput, String& outWhen, String& outDesc) {
@@ -176,20 +226,38 @@ void TaskManagerBot::handleSlashCommand(const String& chatId,
       _telegram.sendMessage(chatId, "Use: /add <descrição da tarefa pontual imediata>", "");
       return;
     }
-    // Se o usuário digitou `/now <id>`, move a tarefa existente para imediata
-    if (cmd == "now" && args.size() == 1 && args[0].toInt() > 0) {
-      cmdMoveTask(chatId, args[0].toInt(), TaskCategory::IMMEDIATE, "", false);
+    // Se o usuário digitou `/now <id>` (ou múltiplos IDs), move as tarefas existentes para imediata
+    bool allIds = !args.empty();
+    for (const String& a : args) {
+      if (!isPositiveIntToken(a)) {
+        allIds = false;
+        break;
+      }
+    }
+    if (cmd == "now" && allIds) {
+      for (const String& a : args) {
+        cmdMoveTask(chatId, a.toInt(), TaskCategory::IMMEDIATE, "", false);
+      }
       return;
     }
     cmdAddTask(chatId, rest, TaskCategory::IMMEDIATE, "", false);
 
   } else if (cmd == "daily" || cmd == "adddaily" || cmd == "diaria") {
     if (rest.length() == 0) {
-      _telegram.sendMessage(chatId, "Use: /daily <descrição da tarefa diária recorrente>", "");
+      _telegram.sendMessage(chatId, "Use: /daily <descrição da tarefa diária ou ID>", "");
       return;
     }
-    if (args.size() == 1 && args[0].toInt() > 0) {
-      cmdMoveTask(chatId, args[0].toInt(), TaskCategory::DAILY, "", false);
+    bool allIds = !args.empty();
+    for (const String& a : args) {
+      if (!isPositiveIntToken(a)) {
+        allIds = false;
+        break;
+      }
+    }
+    if (allIds) {
+      for (const String& a : args) {
+        cmdMoveTask(chatId, a.toInt(), TaskCategory::DAILY, "", false);
+      }
       return;
     }
     cmdAddTask(chatId, rest, TaskCategory::DAILY, "", false);
@@ -199,18 +267,37 @@ void TaskManagerBot::handleSlashCommand(const String& chatId,
     if (rest.length() == 0) {
       _telegram.sendMessage(
           chatId,
-          "Use: /schedule [DD/MM] <descrição da tarefa futura/agendada>\n"
-          "Ex: /schedule 15/12 Consulta médica\n"
-          "Ex: /schedule Declarar imposto de renda",
+          "Use: /schedule [DD/MM] <descrição ou ID>\n"
+          "Ex (nova): /schedule 15/12 Consulta médica\n"
+          "Ex (mover existente): /schedule 27/11 186  ou  /schedule 186 27/11",
           "");
       return;
     }
-    // Se o primeiro argumento for um ID de tarefa existente e o usuário quiser mover para futura
-    if (args.size() >= 1 && args[0].toInt() > 0 && (args.size() == 1 || isDateToken(args[1]))) {
+    // Caso 1: `/schedule <id> [DD/MM]` (ID primeiro, data opcional depois)
+    if (args.size() >= 1 && isPositiveIntToken(args[0]) &&
+        (args.size() == 1 || (args.size() == 2 && isDateToken(args[1])))) {
       String when = (args.size() >= 2) ? args[1] : "";
       when.replace("-", "/");
       cmdMoveTask(chatId, args[0].toInt(), TaskCategory::SCHEDULED, when, false);
       return;
+    }
+    // Caso 2: `/schedule <DD/MM> <id1> [id2...]` (Data primeiro, um ou mais IDs existentes depois)
+    if (args.size() >= 2 && isDateToken(args[0])) {
+      bool restAreIds = true;
+      for (size_t i = 1; i < args.size(); i++) {
+        if (!isPositiveIntToken(args[i])) {
+          restAreIds = false;
+          break;
+        }
+      }
+      if (restAreIds) {
+        String when = args[0];
+        when.replace("-", "/");
+        for (size_t i = 1; i < args.size(); i++) {
+          cmdMoveTask(chatId, args[i].toInt(), TaskCategory::SCHEDULED, when, false);
+        }
+        return;
+      }
     }
     String whenStr, desc;
     extractOptionalDatePrefix(rest, whenStr, desc);

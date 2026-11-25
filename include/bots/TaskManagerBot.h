@@ -70,6 +70,7 @@ private:
   static TaskCategory keyToCategory(const String& key);
   static void extractOptionalDatePrefix(const String& rawInput, String& outWhen, String& outDesc);
   static bool isDateToken(const String& token);
+  static bool isPositiveIntToken(const String& token);
   bool isScheduledForToday(const String& whenStr) const;
 };
 
