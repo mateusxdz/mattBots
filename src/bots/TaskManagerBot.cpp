@@ -3,10 +3,12 @@
 
 TaskManagerBot::TaskManagerBot(ITelegramClient& telegram,
                                IJsonStore& store,
+                               ITimeProvider& timeProvider,
                                const char* dataFilePath,
                                int64_t authorizedUserId)
     : _telegram(telegram),
       _store(store),
+      _timeProvider(timeProvider),
       _dataFilePath(dataFilePath),
       _authorizedUserId(authorizedUserId) {}
 
@@ -29,6 +31,95 @@ void TaskManagerBot::loadTasksData(JsonDocument& doc) {
   if (!doc["today"].is<JsonArray>()) {
     doc["today"].to<JsonArray>();
   }
+}
+
+const char* TaskManagerBot::categoryToKey(TaskCategory cat) {
+  switch (cat) {
+    case TaskCategory::DAILY:
+      return "daily";
+    case TaskCategory::SCHEDULED:
+      return "scheduled";
+    case TaskCategory::IMMEDIATE:
+    default:
+      return "immediate";
+  }
+}
+
+TaskCategory TaskManagerBot::keyToCategory(const String& key) {
+  if (key.equalsIgnoreCase("daily") || key.equalsIgnoreCase("diaria") || key.equalsIgnoreCase("diario")) {
+    return TaskCategory::DAILY;
+  }
+  if (key.equalsIgnoreCase("scheduled") || key.equalsIgnoreCase("future") ||
+      key.equalsIgnoreCase("futura") || key.equalsIgnoreCase("agendada")) {
+    return TaskCategory::SCHEDULED;
+  }
+  return TaskCategory::IMMEDIATE;
+}
+
+bool TaskManagerBot::isDateToken(const String& token) {
+  // Aceita DD/MM, DD/MM/AAAA, DD-MM, DD-MM-AAAA
+  int len = token.length();
+  if (len != 5 && len != 8 && len != 10) {
+    return false;
+  }
+  int slashCount = 0;
+  for (int i = 0; i < len; i++) {
+    char c = token[i];
+    if (c == '/' || c == '-') {
+      slashCount++;
+    } else if (!isDigit(c)) {
+      return false;
+    }
+  }
+  return (slashCount == 1 || slashCount == 2);
+}
+
+void TaskManagerBot::extractOptionalDatePrefix(const String& rawInput, String& outWhen, String& outDesc) {
+  String s = rawInput;
+  s.trim();
+
+  // Remove conectivos iniciais opcionais ("para ", "em ", "dia ")
+  String lower = s;
+  lower.toLowerCase();
+  if (lower.startsWith("para o dia ")) {
+    s = s.substring(11);
+  } else if (lower.startsWith("para dia ")) {
+    s = s.substring(9);
+  } else if (lower.startsWith("no dia ")) {
+    s = s.substring(7);
+  } else if (lower.startsWith("para ")) {
+    s = s.substring(5);
+  } else if (lower.startsWith("dia ")) {
+    s = s.substring(4);
+  } else if (lower.startsWith("em ")) {
+    s = s.substring(3);
+  }
+  s.trim();
+
+  int sp = s.indexOf(' ');
+  if (sp > 0) {
+    String firstTok = s.substring(0, sp);
+    String remainder = s.substring(sp + 1);
+    remainder = TextUtils::stripLeadingConnectors(remainder);
+    if (isDateToken(firstTok) && remainder.length() > 0) {
+      firstTok.replace("-", "/");
+      outWhen = firstTok;
+      outDesc = remainder;
+      return;
+    }
+  }
+
+  outWhen = "";
+  outDesc = s;
+}
+
+bool TaskManagerBot::isScheduledForToday(const String& whenStr) const {
+  if (whenStr.length() < 5) {
+    return false;
+  }
+  String todayFull = _timeProvider.todayStr(); // "DD/MM/YYYY"
+  String todayShort = todayFull.substring(0, 5); // "DD/MM"
+  return (whenStr == todayFull || whenStr == todayShort);
 }
 
 void TaskManagerBot::poll() {
@@ -80,13 +171,76 @@ void TaskManagerBot::handleSlashCommand(const String& chatId,
                                         const String& cmd,
                                         const String& rest,
                                         const std::vector<String>& args) {
-  if (cmd == "add") {
+  if (cmd == "add" || cmd == "now" || cmd == "addnow" || cmd == "immediate") {
     if (rest.length() == 0) {
-      _telegram.sendMessage(chatId, "Use: /add <task_description>", "");
+      _telegram.sendMessage(chatId, "Use: /add <descrição da tarefa pontual imediata>", "");
       return;
     }
-    cmdAddTask(chatId, rest, false);
-  } else if (cmd == "remove") {
+    // Se o usuário digitou `/now <id>`, move a tarefa existente para imediata
+    if (cmd == "now" && args.size() == 1 && args[0].toInt() > 0) {
+      cmdMoveTask(chatId, args[0].toInt(), TaskCategory::IMMEDIATE, "", false);
+      return;
+    }
+    cmdAddTask(chatId, rest, TaskCategory::IMMEDIATE, "", false);
+
+  } else if (cmd == "daily" || cmd == "adddaily" || cmd == "diaria") {
+    if (rest.length() == 0) {
+      _telegram.sendMessage(chatId, "Use: /daily <descrição da tarefa diária recorrente>", "");
+      return;
+    }
+    if (args.size() == 1 && args[0].toInt() > 0) {
+      cmdMoveTask(chatId, args[0].toInt(), TaskCategory::DAILY, "", false);
+      return;
+    }
+    cmdAddTask(chatId, rest, TaskCategory::DAILY, "", false);
+
+  } else if (cmd == "schedule" || cmd == "scheduled" || cmd == "future" ||
+             cmd == "addfuture" || cmd == "agendar" || cmd == "futura") {
+    if (rest.length() == 0) {
+      _telegram.sendMessage(
+          chatId,
+          "Use: /schedule [DD/MM] <descrição da tarefa futura/agendada>\n"
+          "Ex: /schedule 15/12 Consulta médica\n"
+          "Ex: /schedule Declarar imposto de renda",
+          "");
+      return;
+    }
+    // Se o primeiro argumento for um ID de tarefa existente e o usuário quiser mover para futura
+    if (args.size() >= 1 && args[0].toInt() > 0 && (args.size() == 1 || isDateToken(args[1]))) {
+      String when = (args.size() >= 2) ? args[1] : "";
+      when.replace("-", "/");
+      cmdMoveTask(chatId, args[0].toInt(), TaskCategory::SCHEDULED, when, false);
+      return;
+    }
+    String whenStr, desc;
+    extractOptionalDatePrefix(rest, whenStr, desc);
+    cmdAddTask(chatId, desc, TaskCategory::SCHEDULED, whenStr, false);
+
+  } else if (cmd == "done" || cmd == "concluir" || cmd == "check") {
+    if (args.empty()) {
+      _telegram.sendMessage(chatId, "Use: /done <id>", "");
+      return;
+    }
+    int tid = args[0].toInt();
+    if (tid <= 0) {
+      _telegram.sendMessage(chatId, "ID inválido.", "");
+      return;
+    }
+    cmdDoneTask(chatId, tid, false);
+
+  } else if (cmd == "undone" || cmd == "uncheck") {
+    if (args.empty()) {
+      _telegram.sendMessage(chatId, "Use: /undone <id>", "");
+      return;
+    }
+    int tid = args[0].toInt();
+    if (tid <= 0) {
+      _telegram.sendMessage(chatId, "ID inválido.", "");
+      return;
+    }
+    cmdUndoneTask(chatId, tid, false);
+
+  } else if (cmd == "remove" || cmd == "delete") {
     if (args.empty()) {
       _telegram.sendMessage(chatId, "Use: /remove <id>", "");
       return;
@@ -97,13 +251,47 @@ void TaskManagerBot::handleSlashCommand(const String& chatId,
       return;
     }
     cmdRemoveTask(chatId, tid, false);
+
+  } else if (cmd == "move") {
+    if (args.size() < 2) {
+      _telegram.sendMessage(chatId, "Use: /move <id> <daily|now|future> [DD/MM]", "");
+      return;
+    }
+    int tid = args[0].toInt();
+    TaskCategory cat = keyToCategory(args[1]);
+    String when = (args.size() >= 3) ? args[2] : "";
+    when.replace("-", "/");
+    cmdMoveTask(chatId, tid, cat, when, false);
+
   } else if (cmd == "list") {
-    cmdListTasks(chatId, false);
+    if (!args.empty()) {
+      String f = args[0];
+      if (f.equalsIgnoreCase("daily") || f.equalsIgnoreCase("diarias")) {
+        cmdListTasks(chatId, static_cast<int>(TaskCategory::DAILY), false);
+        return;
+      } else if (f.equalsIgnoreCase("now") || f.equalsIgnoreCase("immediate") || f.equalsIgnoreCase("imediatas")) {
+        cmdListTasks(chatId, static_cast<int>(TaskCategory::IMMEDIATE), false);
+        return;
+      } else if (f.equalsIgnoreCase("future") || f.equalsIgnoreCase("scheduled") ||
+                 f.equalsIgnoreCase("futuras") || f.equalsIgnoreCase("agendadas")) {
+        cmdListTasks(chatId, static_cast<int>(TaskCategory::SCHEDULED), false);
+        return;
+      }
+    }
+    cmdListTasks(chatId, -1, false);
+
+  } else if (cmd == "listdaily") {
+    cmdListTasks(chatId, static_cast<int>(TaskCategory::DAILY), false);
+  } else if (cmd == "listnow" || cmd == "listimmediate") {
+    cmdListTasks(chatId, static_cast<int>(TaskCategory::IMMEDIATE), false);
+  } else if (cmd == "listfuture" || cmd == "listscheduled") {
+    cmdListTasks(chatId, static_cast<int>(TaskCategory::SCHEDULED), false);
+
   } else if (cmd == "clear" || cmd == "cleartasks") {
     cmdClearTasks(chatId, args);
   } else if (cmd == "today") {
     if (args.empty()) {
-      _telegram.sendMessage(chatId, "Use: /today <id1> <id2> ...", "");
+      cmdTodayList(chatId, false);
       return;
     }
     cmdTodayAdd(chatId, args, false);
@@ -127,7 +315,11 @@ void TaskManagerBot::handleSlashCommand(const String& chatId,
   }
 }
 
-void TaskManagerBot::cmdAddTask(const String& chatId, const String& taskName, bool naturalStyle) {
+void TaskManagerBot::cmdAddTask(const String& chatId,
+                                const String& taskName,
+                                TaskCategory category,
+                                const String& whenStr,
+                                bool naturalStyle) {
   JsonDocument doc;
   loadTasksData(doc);
   JsonArray tasks = doc["tasks"].as<JsonArray>();
@@ -142,13 +334,81 @@ void TaskManagerBot::cmdAddTask(const String& chatId, const String& taskName, bo
   JsonObject newTask = tasks.add<JsonObject>();
   newTask["id"] = nextId;
   newTask["name"] = taskName;
+  newTask["type"] = categoryToKey(category);
+  if (category == TaskCategory::SCHEDULED && whenStr.length() > 0) {
+    newTask["when"] = whenStr;
+  }
   _store.save(_dataFilePath, doc);
 
-  if (naturalStyle) {
-    _telegram.sendMessage(chatId, "✅ *Tarefa #" + String(nextId) + " adicionada:* " + taskName);
+  String msg;
+  if (category == TaskCategory::DAILY) {
+    msg = "🔄 *Tarefa Diária #" + String(nextId) + " adicionada:* " + taskName +
+          "\n_(Repete todos os dias indefinidamente)_";
+  } else if (category == TaskCategory::SCHEDULED) {
+    String whenLabel = (whenStr.length() > 0) ? (" para *" + whenStr + "*") : "";
+    msg = "🗓️ *Tarefa Agendada/Futura #" + String(nextId) + " adicionada" + whenLabel + ":* " + taskName;
   } else {
-    _telegram.sendMessage(chatId, "✅ Added task #" + String(nextId) + ": " + taskName, "");
+    msg = "⚡ *Tarefa Pontual Imediata #" + String(nextId) + " adicionada:* " + taskName;
   }
+  _telegram.sendMessage(chatId, msg);
+}
+
+void TaskManagerBot::cmdDoneTask(const String& chatId, int taskId, bool naturalStyle) {
+  JsonDocument doc;
+  loadTasksData(doc);
+  JsonArray tasks = doc["tasks"].as<JsonArray>();
+  JsonArray today = doc["today"].as<JsonArray>();
+
+  for (size_t i = 0; i < tasks.size(); i++) {
+    JsonObject t = tasks[i];
+    if ((t["id"] | 0) == taskId) {
+      String name = t["name"] | "";
+      TaskCategory cat = keyToCategory(t["type"] | "immediate");
+
+      if (cat == TaskCategory::DAILY) {
+        String todayStr = _timeProvider.todayStr();
+        t["last_done"] = todayStr;
+        _store.save(_dataFilePath, doc);
+        _telegram.sendMessage(
+            chatId,
+            "✅ *Tarefa Diária #" + String(taskId) + " concluída hoje!* (" + name + ")\n"
+            "🔄 _Como ela é diária, continuará ativa para os próximos dias._");
+        return;
+      }
+
+      // Tarefa pontual (imediata ou agendada): concluir remove definitivamente
+      tasks.remove(i);
+      for (size_t j = 0; j < today.size(); j++) {
+        if (today[j].as<int>() == taskId) {
+          today.remove(j);
+          break;
+        }
+      }
+      _store.save(_dataFilePath, doc);
+      _telegram.sendMessage(
+          chatId,
+          "✅ *Tarefa Pontual #" + String(taskId) + " concluída e finalizada!* (" + name + ")");
+      return;
+    }
+  }
+
+  _telegram.sendMessage(chatId, "⚠️ Tarefa #" + String(taskId) + " não encontrada.");
+}
+
+void TaskManagerBot::cmdUndoneTask(const String& chatId, int taskId, bool naturalStyle) {
+  JsonDocument doc;
+  loadTasksData(doc);
+  JsonArray tasks = doc["tasks"].as<JsonArray>();
+
+  for (JsonObject t : tasks) {
+    if ((t["id"] | 0) == taskId) {
+      t["last_done"] = "";
+      _store.save(_dataFilePath, doc);
+      _telegram.sendMessage(chatId, "⬜ *Tarefa #" + String(taskId) + " marcada como pendente novamente para hoje.*");
+      return;
+    }
+  }
+  _telegram.sendMessage(chatId, "⚠️ Tarefa #" + String(taskId) + " não encontrada.");
 }
 
 void TaskManagerBot::cmdRemoveTask(const String& chatId, int taskId, bool naturalStyle) {
@@ -158,8 +418,10 @@ void TaskManagerBot::cmdRemoveTask(const String& chatId, int taskId, bool natura
   JsonArray today = doc["today"].as<JsonArray>();
 
   bool found = false;
+  String removedName;
   for (size_t i = 0; i < tasks.size(); i++) {
     if ((tasks[i]["id"] | 0) == taskId) {
+      removedName = tasks[i]["name"] | "";
       tasks.remove(i);
       found = true;
       break;
@@ -175,44 +437,150 @@ void TaskManagerBot::cmdRemoveTask(const String& chatId, int taskId, bool natura
 
   _store.save(_dataFilePath, doc);
 
-  if (naturalStyle) {
-    if (found) {
-      _telegram.sendMessage(chatId, "🗑️ *Tarefa #" + String(taskId) + " removida!*");
-    } else {
-      _telegram.sendMessage(chatId, "⚠️ Tarefa #" + String(taskId) + " não encontrada.");
-    }
+  if (found) {
+    _telegram.sendMessage(chatId, "🗑️ *Tarefa #" + String(taskId) + " removida permanentemente!* (" + removedName + ")");
   } else {
-    _telegram.sendMessage(chatId, "🗑️ Removed task #" + String(taskId), "");
+    _telegram.sendMessage(chatId, "⚠️ Tarefa #" + String(taskId) + " não encontrada.");
   }
 }
 
-void TaskManagerBot::cmdListTasks(const String& chatId, bool naturalStyle) {
+void TaskManagerBot::cmdMoveTask(const String& chatId,
+                                 int taskId,
+                                 TaskCategory targetCategory,
+                                 const String& whenStr,
+                                 bool naturalStyle) {
+  JsonDocument doc;
+  loadTasksData(doc);
+  JsonArray tasks = doc["tasks"].as<JsonArray>();
+
+  for (JsonObject t : tasks) {
+    if ((t["id"] | 0) == taskId) {
+      String name = t["name"] | "";
+      t["type"] = categoryToKey(targetCategory);
+      if (targetCategory == TaskCategory::SCHEDULED && whenStr.length() > 0) {
+        t["when"] = whenStr;
+      } else if (targetCategory != TaskCategory::SCHEDULED) {
+        t.remove("when");
+      }
+      _store.save(_dataFilePath, doc);
+
+      String catLabel;
+      if (targetCategory == TaskCategory::DAILY) {
+        catLabel = "🔄 *Diária (Todos os dias)*";
+      } else if (targetCategory == TaskCategory::SCHEDULED) {
+        catLabel = "🗓️ *Futura / Agendada*" + (whenStr.length() > 0 ? (" (" + whenStr + ")") : String(""));
+      } else {
+        catLabel = "⚡ *Pontual Imediata (Fazer Agora)*";
+      }
+      _telegram.sendMessage(chatId,
+                            "🔀 *Tarefa #" + String(taskId) + "* (" + name + ") movida para: " + catLabel);
+      return;
+    }
+  }
+
+  _telegram.sendMessage(chatId, "⚠️ Tarefa #" + String(taskId) + " não encontrada.");
+}
+
+void TaskManagerBot::cmdListTasks(const String& chatId, int filterCategory, bool naturalStyle) {
   JsonDocument doc;
   loadTasksData(doc);
   JsonArray tasks = doc["tasks"].as<JsonArray>();
 
   if (tasks.size() == 0) {
-    _telegram.sendMessage(chatId, naturalStyle ? "📭 Nenhuma tarefa pendente." : "No tasks yet.", "");
+    _telegram.sendMessage(chatId, "📭 Nenhuma tarefa cadastrada.");
     return;
   }
 
-  String out = naturalStyle ? "📋 *Tarefas:*\n" : "📋 *Tasks:*\n";
+  String todayStr = _timeProvider.todayStr();
+  String dailyLines;
+  String immediateLines;
+  String scheduledLines;
+
   for (JsonObject t : tasks) {
-    out += "[" + String(t["id"] | 0) + "] " + String(t["name"] | "") + "\n";
+    int id = t["id"] | 0;
+    String name = t["name"] | "";
+    TaskCategory cat = keyToCategory(t["type"] | "immediate");
+
+    if (cat == TaskCategory::DAILY) {
+      String lastDone = t["last_done"] | "";
+      String statusIcon = (lastDone == todayStr) ? "✅" : "⬜";
+      dailyLines += "  " + statusIcon + " `[" + String(id) + "]` " + name + "\n";
+    } else if (cat == TaskCategory::SCHEDULED) {
+      String when = t["when"] | "";
+      String whenBadge = (when.length() > 0) ? (" _(" + when + ")_") : "";
+      if (isScheduledForToday(when)) {
+        whenBadge += " 🔔 *HOJE!*";
+      }
+      scheduledLines += "  🗓️ `[" + String(id) + "]` " + name + whenBadge + "\n";
+    } else {
+      immediateLines += "  ⚡ `[" + String(id) + "]` " + name + "\n";
+    }
   }
+
+  String out;
+  if (filterCategory == static_cast<int>(TaskCategory::DAILY)) {
+    out = "🔄 *Tarefas Diárias (Todos os dias):*\n";
+    out += (dailyLines.length() > 0) ? dailyLines : "  _Nenhuma tarefa diária cadastrada._\n";
+  } else if (filterCategory == static_cast<int>(TaskCategory::IMMEDIATE)) {
+    out = "⚡ *Tarefas Pontuais — Fazer Agora (Imediatas):*\n";
+    out += (immediateLines.length() > 0) ? immediateLines : "  _Nenhuma tarefa imediata pendente._\n";
+  } else if (filterCategory == static_cast<int>(TaskCategory::SCHEDULED)) {
+    out = "🗓️ *Tarefas Pontuais — Futuras / Agendadas:*\n";
+    out += (scheduledLines.length() > 0) ? scheduledLines : "  _Nenhuma tarefa futura agendada._\n";
+  } else {
+    out = "📋 *Painel de Tarefas (" + todayStr + "):*\n\n";
+
+    out += "🔄 *Diárias (Todos os dias):*\n";
+    out += (dailyLines.length() > 0) ? dailyLines : "  _Nenhuma_\n";
+
+    out += "\n⚡ *Pontuais — Fazer Agora (Imediatas):*\n";
+    out += (immediateLines.length() > 0) ? immediateLines : "  _Nenhuma_\n";
+
+    out += "\n🗓️ *Pontuais — Futuras / Agendadas:*\n";
+    out += (scheduledLines.length() > 0) ? scheduledLines : "  _Nenhuma_\n";
+
+    out += "\n💡 _Use `/done <id>` para concluir (diárias marcam ✅ hoje; pontuais são eliminadas)._";
+  }
+
   _telegram.sendMessage(chatId, out);
 }
 
 void TaskManagerBot::cmdClearTasks(const String& chatId, const std::vector<String>& args) {
   if (args.empty() || !args[0].equalsIgnoreCase("confirm")) {
-    _telegram.sendMessage(chatId, "⚠️ To clear all tasks, type: /clear confirm", "");
+    _telegram.sendMessage(
+        chatId,
+        "⚠️ Para limpar as tarefas, digite:\n"
+        "• `/clear confirm` (limpa todas)\n"
+        "• `/clear confirm now` (limpa apenas imediatas)\n"
+        "• `/clear confirm future` (limpa apenas futuras)\n"
+        "• `/clear confirm daily` (limpa apenas diárias)");
     return;
   }
+
   JsonDocument doc;
   loadTasksData(doc);
+
+  if (args.size() >= 2) {
+    TaskCategory targetCat = keyToCategory(args[1]);
+    JsonArray tasks = doc["tasks"].as<JsonArray>();
+    size_t i = 0;
+    while (i < tasks.size()) {
+      TaskCategory cat = keyToCategory(tasks[i]["type"] | "immediate");
+      if (cat == targetCat) {
+        tasks.remove(i);
+      } else {
+        i++;
+      }
+    }
+    _store.save(_dataFilePath, doc);
+    _telegram.sendMessage(chatId, "🧹 Tarefas da categoria selecionada foram limpas.");
+    return;
+  }
+
   doc["tasks"].to<JsonArray>();
+  doc["today"].to<JsonArray>();
   _store.save(_dataFilePath, doc);
-  _telegram.sendMessage(chatId, "🧹 Cleared all tasks.", "");
+  _telegram.sendMessage(chatId, "🧹 Todas as tarefas foram limpas.");
 }
 
 void TaskManagerBot::cmdTodayAdd(const String& chatId,
@@ -259,13 +627,9 @@ void TaskManagerBot::cmdTodayAdd(const String& chatId,
       if (i > 0) listStr += ", ";
       listStr += String(addedIds[i]);
     }
-    if (naturalStyle) {
-      _telegram.sendMessage(chatId, "📌 *Tarefa #" + listStr + " adicionada para hoje!*");
-    } else {
-      _telegram.sendMessage(chatId, "📌 Added to today: " + listStr, "");
-    }
+    _telegram.sendMessage(chatId, "📌 *Tarefa #" + listStr + " adicionada ao foco de hoje!*");
   } else {
-    _telegram.sendMessage(chatId, naturalStyle ? "⚠️ Tarefa não encontrada ou já está na lista de hoje." : "Nothing added.", "");
+    _telegram.sendMessage(chatId, "⚠️ Tarefa não encontrada ou já está na lista de hoje.");
   }
 }
 
@@ -275,26 +639,54 @@ void TaskManagerBot::cmdTodayList(const String& chatId, bool naturalStyle) {
   JsonArray tasks = doc["tasks"].as<JsonArray>();
   JsonArray today = doc["today"].as<JsonArray>();
 
-  if (today.size() == 0) {
-    _telegram.sendMessage(
-        chatId,
-        naturalStyle ? "📭 Nenhuma tarefa agendada para hoje." : "📭 No tasks for today.",
-        "");
-    return;
+  String todayStr = _timeProvider.todayStr();
+  String dailySection;
+  String scheduledTodaySection;
+  String manualTodaySection;
+
+  for (JsonObject t : tasks) {
+    int id = t["id"] | 0;
+    String name = t["name"] | "";
+    TaskCategory cat = keyToCategory(t["type"] | "immediate");
+
+    if (cat == TaskCategory::DAILY) {
+      String lastDone = t["last_done"] | "";
+      String icon = (lastDone == todayStr) ? "✅" : "⬜";
+      dailySection += "  " + icon + " `[" + String(id) + "]` " + name + "\n";
+    } else if (cat == TaskCategory::SCHEDULED && isScheduledForToday(t["when"] | "")) {
+      scheduledTodaySection += "  🔔 `[" + String(id) + "]` " + name + " _(" + String(t["when"] | "") + ")_\n";
+    }
   }
 
-  String out = naturalStyle ? "📅 *Tarefas de Hoje:*\n" : "📅 *Today:*\n";
   for (JsonVariant v : today) {
     int tid = v.as<int>();
-    String taskName = "❓ Unknown task";
     for (JsonObject t : tasks) {
       if ((t["id"] | 0) == tid) {
-        taskName = t["name"] | "";
+        TaskCategory cat = keyToCategory(t["type"] | "immediate");
+        if (cat != TaskCategory::DAILY) {
+          manualTodaySection += "  ⚡ `[" + String(tid) + "]` " + String(t["name"] | "") + "\n";
+        }
         break;
       }
     }
-    out += "[" + String(tid) + "] " + taskName + "\n";
   }
+
+  if (dailySection.length() == 0 && scheduledTodaySection.length() == 0 && manualTodaySection.length() == 0) {
+    _telegram.sendMessage(chatId, "📭 Nenhuma tarefa diária ou agendada para hoje (" + todayStr + ").");
+    return;
+  }
+
+  String out = "📅 *Agenda de Hoje (" + todayStr + "):*\n";
+  if (dailySection.length() > 0) {
+    out += "\n🔄 *Diárias:*\n" + dailySection;
+  }
+  if (scheduledTodaySection.length() > 0) {
+    out += "\n🔔 *Agendadas para Hoje:*\n" + scheduledTodaySection;
+  }
+  if (manualTodaySection.length() > 0) {
+    out += "\n📌 *Pontuais Selecionadas para Hoje:*\n" + manualTodaySection;
+  }
+  out += "\n💡 _Use `/done <id>` para concluir uma tarefa._";
   _telegram.sendMessage(chatId, out);
 }
 
@@ -314,9 +706,9 @@ void TaskManagerBot::cmdTodayRemove(const String& chatId, int taskId) {
 
   if (removed) {
     _store.save(_dataFilePath, doc);
-    _telegram.sendMessage(chatId, "➖ Removed #" + String(taskId) + " from today.", "");
+    _telegram.sendMessage(chatId, "➖ Tarefa #" + String(taskId) + " removida da seleção de hoje.");
   } else {
-    _telegram.sendMessage(chatId, "Task not in today list.", "");
+    _telegram.sendMessage(chatId, "⚠️ Essa tarefa não está na seleção manual de hoje.");
   }
 }
 
@@ -325,22 +717,34 @@ void TaskManagerBot::cmdTodayClear(const String& chatId) {
   loadTasksData(doc);
   doc["today"].to<JsonArray>();
   _store.save(_dataFilePath, doc);
-  _telegram.sendMessage(chatId, "🧹 Cleared today's tasks.", "");
+  _telegram.sendMessage(chatId, "🧹 Seleção manual de tarefas de hoje foi limpa.");
 }
 
 void TaskManagerBot::cmdHelp(const String& chatId) {
   String helpText =
-      "📋 *Comandos do Gerenciador de Tarefas (Tasks):*\n\n"
-      "• `/add <tarefa>` : Adiciona uma nova tarefa\n"
-      "• `/remove <id>` : Remove uma tarefa pelo ID\n"
-      "• `/list` : Lista todas as tarefas pendentes\n"
-      "• `/clear confirm` : Limpa todas as tarefas\n\n"
-      "📅 *Tarefas de Hoje:*\n"
-      "• `/today <id1> <id2>` : Adiciona tarefas para a lista de hoje\n"
-      "• `/todaylist` : Exibe tarefas agendadas para hoje\n"
-      "• `/todayremove <id>` : Remove tarefa da lista de hoje\n"
-      "• `/todayclear` : Limpa as tarefas de hoje\n\n"
-      "💬 *Você também pode digitar livremente (ex: \"tarefas de hoje\", \"adicionar tarefa pagar boleto\").*";
+      "📋 *Gerenciador de Tarefas (3 Categorias):*\n\n"
+      "🔄 *1. Tarefas Diárias (Todos os dias, indefinidamente):*\n"
+      "• `/daily <tarefa>` : Cria tarefa diária recorrente\n"
+      "• `/listdaily` : Lista apenas as tarefas diárias\n\n"
+      "⚡ *2. Tarefas Pontuais — Fazer Agora (Imediatas):*\n"
+      "• `/add <tarefa>` (ou `/now <tarefa>`) : Cria tarefa imediata\n"
+      "• `/listnow` : Lista apenas as tarefas imediatas\n\n"
+      "🗓️ *3. Tarefas Pontuais — Futuras / Agendadas:*\n"
+      "• `/schedule [DD/MM] <tarefa>` (ou `/future <tarefa>`) : Cria tarefa futura/agendada\n"
+      "• `/listfuture` : Lista apenas as tarefas futuras\n\n"
+      "✅ *Concluir, Mover e Gerenciar:*\n"
+      "• `/list` : Painel completo segregado nas 3 categorias\n"
+      "• `/done <id>` : Conclui tarefa (diária = marca ✅ hoje; pontual = elimina)\n"
+      "• `/undone <id>` : Desmarca tarefa diária feita hoje\n"
+      "• `/move <id> <daily|now|future> [DD/MM]` : Muda categoria da tarefa\n"
+      "• `/remove <id>` : Exclui permanentemente qualquer tarefa\n"
+      "• `/todaylist` : Mostra as diárias + agendadas para hoje + `/today <id>`\n\n"
+      "💬 *Linguagem Natural:*\n"
+      "• _\"Tarefa diária tomar creatina\"_\n"
+      "• _\"Adicionar tarefa trocar lâmpada\"_\n"
+      "• _\"Agendar tarefa 15/12 consulta médica\"_\n"
+      "• _\"Tarefa futura renovar CNH\"_\n"
+      "• _\"Concluir tarefa 3\"_";
   _telegram.sendMessage(chatId, helpText);
 }
 
@@ -352,11 +756,30 @@ void TaskManagerBot::handleNaturalLanguage(const String& chatId, const String& r
     return;
   }
 
-  // Listar Tarefas
+  // Listagens por categoria em linguagem natural
+  if (clean == "tarefas diarias" || clean == "listar diarias" || clean == "minhas tarefas diarias" ||
+      clean == "diarias" || clean == "ver diarias") {
+    cmdListTasks(chatId, static_cast<int>(TaskCategory::DAILY), true);
+    return;
+  }
+
+  if (clean == "tarefas imediatas" || clean == "tarefas para agora" || clean == "listar imediatas" ||
+      clean == "tarefas pontuais" || clean == "fazer agora") {
+    cmdListTasks(chatId, static_cast<int>(TaskCategory::IMMEDIATE), true);
+    return;
+  }
+
+  if (clean == "tarefas futuras" || clean == "tarefas agendadas" || clean == "listar futuras" ||
+      clean == "listar agendadas" || clean == "agendadas" || clean == "futuras") {
+    cmdListTasks(chatId, static_cast<int>(TaskCategory::SCHEDULED), true);
+    return;
+  }
+
+  // Listar todas as tarefas segregadas
   if (clean == "tarefas" || clean == "listar tarefas" || clean == "minhas tarefas" ||
       clean == "ver tarefas" || clean == "mostrar tarefas" || clean == "lista de tarefas" ||
       clean == "tarefas pendentes") {
-    cmdListTasks(chatId, true);
+    cmdListTasks(chatId, -1, true);
     return;
   }
 
@@ -386,11 +809,13 @@ void TaskManagerBot::handleNaturalLanguage(const String& chatId, const String& r
     }
   }
 
-  // Remover tarefa: "remover tarefa 5", "concluir tarefa 5", "apagar tarefa 5"
-  if (clean.startsWith("remover ") || clean.startsWith("remove ") ||
+  // Concluir tarefa vs Remover permanentemente
+  if (clean.startsWith("concluir ") || clean.startsWith("conclui ") ||
+      clean.startsWith("fiz ") || clean.startsWith("feita ") ||
+      clean.startsWith("finalizar ") || clean.startsWith("finaliza ") ||
+      clean.startsWith("remover ") || clean.startsWith("remove ") ||
       clean.startsWith("deletar ") || clean.startsWith("deleta ") ||
       clean.startsWith("apagar ") || clean.startsWith("apaga ") ||
-      clean.startsWith("concluir ") || clean.startsWith("conclui ") ||
       clean.startsWith("excluir ") || clean.startsWith("exclui ") ||
       clean.startsWith("tarefa ")) {
     for (int i = clean.length() - 1; i >= 0; i--) {
@@ -399,28 +824,88 @@ void TaskManagerBot::handleNaturalLanguage(const String& chatId, const String& r
         int startIdx = i;
         while (startIdx > 0 && isDigit(clean[startIdx - 1])) startIdx--;
         int tid = clean.substring(startIdx, endIdx).toInt();
-        if (tid > 0 && (clean.indexOf("remover") != -1 || clean.indexOf("remove") != -1 ||
-                        clean.indexOf("apaga") != -1 || clean.indexOf("deleta") != -1 ||
-                        clean.indexOf("conclui") != -1 || clean.indexOf("feita") != -1 ||
-                        clean.indexOf("pronta") != -1 || clean.indexOf("exclui") != -1)) {
-          cmdRemoveTask(chatId, tid, true);
-          return;
+        if (tid > 0) {
+          bool isDoneAction =
+              clean.indexOf("conclui") != -1 || clean.indexOf("feita") != -1 ||
+              clean.indexOf("feito") != -1 || clean.indexOf("pronta") != -1 ||
+              clean.indexOf("finaliz") != -1 || clean.startsWith("fiz ");
+          bool isRemoveAction =
+              clean.indexOf("remover") != -1 || clean.indexOf("remove") != -1 ||
+              clean.indexOf("apaga") != -1 || clean.indexOf("deleta") != -1 ||
+              clean.indexOf("exclui") != -1;
+          if (isDoneAction) {
+            cmdDoneTask(chatId, tid, true);
+            return;
+          }
+          if (isRemoveAction) {
+            cmdRemoveTask(chatId, tid, true);
+            return;
+          }
         }
         break;
       }
     }
   }
 
-  // Adicionar tarefa: "adicionar tarefa ...", "nova tarefa ...", "tarefa ..."
   String rawClean = TextUtils::sanitizeText(rawText);
+
+  // 1) Tarefa Diária em linguagem natural: "tarefa diária ...", "adicionar tarefa diária ..."
+  int diariaIdx = clean.indexOf("diaria");
+  if (diariaIdx == -1) diariaIdx = clean.indexOf("diario");
+  if (diariaIdx != -1) {
+    int spaceAfter = rawClean.indexOf(' ', diariaIdx);
+    if (spaceAfter != -1 && spaceAfter + 1 < static_cast<int>(rawClean.length())) {
+      String desc = TextUtils::stripLeadingConnectors(rawClean.substring(spaceAfter + 1));
+      if (desc.length() > 0) {
+        cmdAddTask(chatId, TextUtils::capitalizeFirst(desc), TaskCategory::DAILY, "", true);
+        return;
+      }
+    }
+  }
+
+  // 2) Tarefa Futura / Agendada em linguagem natural: "agendar tarefa ...", "tarefa futura ...", "tarefa agendada ..."
+  int futuraIdx = clean.indexOf("tarefa futura");
+  int agendadaIdx = clean.indexOf("tarefa agendada");
+  if (futuraIdx != -1 || agendadaIdx != -1) {
+    int baseIdx = (futuraIdx != -1) ? (futuraIdx + 7) : (agendadaIdx + 7);
+    int spaceAfter = rawClean.indexOf(' ', baseIdx);
+    if (spaceAfter != -1 && spaceAfter + 1 < static_cast<int>(rawClean.length())) {
+      String restDesc = TextUtils::stripLeadingConnectors(rawClean.substring(spaceAfter + 1));
+      String whenStr, desc;
+      extractOptionalDatePrefix(restDesc, whenStr, desc);
+      if (desc.length() > 0) {
+        cmdAddTask(chatId, TextUtils::capitalizeFirst(desc), TaskCategory::SCHEDULED, whenStr, true);
+        return;
+      }
+    }
+  }
+  if (clean.startsWith("agendar ")) {
+    int firstSp = rawClean.indexOf(' ');
+    String restDesc = (firstSp != -1) ? rawClean.substring(firstSp + 1) : "";
+    restDesc.trim();
+    String restLower = TextUtils::normalizeLower(restDesc);
+    if (restLower.startsWith("tarefa ")) {
+      int tIdx = restDesc.indexOf(' ');
+      if (tIdx != -1) restDesc = restDesc.substring(tIdx + 1);
+    }
+    restDesc = TextUtils::stripLeadingConnectors(restDesc);
+    String whenStr, desc;
+    extractOptionalDatePrefix(restDesc, whenStr, desc);
+    if (desc.length() > 0) {
+      cmdAddTask(chatId, TextUtils::capitalizeFirst(desc), TaskCategory::SCHEDULED, whenStr, true);
+      return;
+    }
+  }
+
+  // 3) Tarefa Pontual Imediata: "adicionar tarefa ...", "nova tarefa ...", "tarefa ..."
   int tarefaIdx = clean.indexOf("tarefa");
   if (tarefaIdx != -1 && !clean.endsWith("tarefas")) {
-    int afterWord = tarefaIdx + 6; // strlen("tarefa")
-    if (afterWord < static_cast<int>(rawClean.length())) {
-      String desc = rawClean.substring(afterWord);
+    int spaceAfter = rawClean.indexOf(' ', tarefaIdx);
+    if (spaceAfter != -1 && spaceAfter + 1 < static_cast<int>(rawClean.length())) {
+      String desc = rawClean.substring(spaceAfter + 1);
       desc = TextUtils::stripLeadingConnectors(desc);
       if (desc.length() > 0) {
-        cmdAddTask(chatId, TextUtils::capitalizeFirst(desc), true);
+        cmdAddTask(chatId, TextUtils::capitalizeFirst(desc), TaskCategory::IMMEDIATE, "", true);
         return;
       }
     }
@@ -430,8 +915,9 @@ void TaskManagerBot::handleNaturalLanguage(const String& chatId, const String& r
       chatId,
       "❓ *Não reconheci esse comando de tarefas.*\n\n"
       "💡 *Exemplos:*\n"
-      "• 📋 _\"Adicionar tarefa comprar pão\"_\n"
-      "• 📋 _\"Tarefas de hoje\"_\n"
-      "• 📋 _\"Listar tarefas\"_");
+      "• 🔄 _\"Tarefa diária tomar creatina\"_ (`/daily`)\n"
+      "• ⚡ _\"Adicionar tarefa comprar lâmpada\"_ (`/add`)\n"
+      "• 🗓️ _\"Agendar tarefa 15/12 consulta médica\"_ (`/schedule`)\n"
+      "• ✅ _\"Concluir tarefa 1\"_ (`/done 1`)\n"
+      "• 📋 _\"Listar tarefas\"_ (`/list`)");
 }
-

@@ -82,6 +82,7 @@ static MoneyManagerBot moneyManagerBot(tgMoneyManager,
 
 static TaskManagerBot taskManagerBot(tgTaskManager,
                                      jsonStore,
+                                     timeProvider,
                                      AppConfig::FILE_TASKS_JSON,
                                      0);
 
